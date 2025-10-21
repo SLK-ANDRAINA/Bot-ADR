@@ -7,6 +7,10 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException
+from webdriver_manager.chrome import ChromeDriverManager
 
 # === 1. Lecture du fichier Excel ===
 fichier_excel = "excel/DATA_MIG.xlsx"
@@ -15,103 +19,157 @@ if not os.path.exists(fichier_excel):
     print(f"❌ Fichier introuvable : {fichier_excel}")
     exit()
 
-# Lire tout le fichier Excel
 df = pd.read_excel(fichier_excel)
 
 # --- Infos de connexion ---
-lien_prod = df.iloc[0, 0]   # 1ère colonne = lien principal
-username = df.iloc[0, 2]    # 3e colonne
-password = df.iloc[0, 3]    # 4e colonne
+lien_prod = df.iloc[0, 0]
+username = df.iloc[0, 2]
+password = df.iloc[0, 3]
 
 print(f"Lien: {lien_prod}\nUser: {username}\nPass: {password}")
 
-# === 2. Lancement du navigateur et connexion ===
+# === 2. Configuration Chrome (profil temporaire) ===
 chrome_options = Options()
 chrome_options.add_argument("--start-maximized")
-driver = webdriver.Chrome(service=Service(), options=chrome_options)
+chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-gpu")
+chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--remote-debugging-port=9222")
+chrome_options.add_argument("--ignore-certificate-errors")
+
+# 👉 Création d’un profil temporaire
+profil_temp = os.path.join(os.getcwd(), "chrome_temp_profile")
+if not os.path.exists(profil_temp):
+    os.makedirs(profil_temp)
+chrome_options.add_argument(f"--user-data-dir={profil_temp}")
+
+# === 3. Lancement du navigateur ===
+try:
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    print("✅ Chrome lancé avec succès")
+except Exception as e:
+    print("❌ Erreur lors du lancement de Chrome :", e)
+    exit()
+
+# === 4. Connexion IFS ===
 driver.get(lien_prod)
 
-# --- Clic sur "Open IFS Cloud" ---
-time.sleep(5)
 try:
-    open_btn = driver.find_element(By.XPATH, '//div[text()="Open IFS Cloud"]')
-    open_btn.click()
+    WebDriverWait(driver, 15).until(
+        EC.element_to_be_clickable((By.XPATH, '//div[text()="Open IFS Cloud"]'))
+    ).click()
     print("✅ Clic sur 'Open IFS Cloud' réussi")
-except Exception as e:
-    print("⚠️ Erreur sur clic Open IFS Cloud:", e)
+except TimeoutException:
+    print("⚠️ Bouton 'Open IFS Cloud' non trouvé — peut-être déjà connecté.")
 
 # --- Connexion ---
-time.sleep(5)
 try:
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "username")))
     driver.find_element(By.ID, "username").send_keys(username)
     driver.find_element(By.ID, "password").send_keys(password)
     driver.find_element(By.ID, "id-ifs-login-btn").click()
     print("✅ Connexion réussie")
-except Exception as e:
-    print("⚠️ Erreur de connexion:", e)
+except Exception:
+    print("ℹ️ Déjà connecté ou interface différente.")
 
-# === 3. Lecture des ordres de traitement ===
-# On suppose que les entêtes sont à la ligne 4 → index 3
+# === 5. Lecture des ordres ===
 df_orders = pd.read_excel(fichier_excel, skiprows=3)
-
-# On prépare une nouvelle colonne pour stocker le View détecté
 df_orders["View détecté"] = None
 
-# === 4. Exécution des ordres ===
+# === 6. Exécution du premier lien ===
 first_link = df_orders.iloc[0]["Lien"]
 print(f"\n➡️ Accès au premier lien : {first_link}")
+driver.get(first_link)
 
 try:
-    driver.get(first_link)
+    # Attente du chargement complet
+    WebDriverWait(driver, 30).until_not(
+        EC.presence_of_element_located((By.CSS_SELECTOR, ".spinner-wrapper"))
+    )
     print("✅ Page du premier lien chargée avec succès")
 
-    # --- Clic sur les initiales (ex: "AN") ---
-    time.sleep(5)
-    initials_btn = driver.find_element(By.XPATH, "//div[contains(@class,'initials')]")
-    initials_btn.click()
-    print("✅ Clic sur le bouton 'initiales' réussi")
+    # --- Clic sur les initiales ---
+    try:
+        initials_btn = WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "div.initials"))
+        )
+        initials_btn.click()
+        print("✅ Clic sur le bouton 'initiales' réussi")
+    except ElementClickInterceptedException:
+        print("⏳ Attente que le spinner disparaisse avant de cliquer...")
+        WebDriverWait(driver, 15).until_not(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".spinner-wrapper"))
+        )
+        initials_btn = driver.find_element(By.CSS_SELECTOR, "div.initials")
+        initials_btn.click()
+        print("✅ Clic sur le bouton 'initiales' réussi après attente")
 
     # --- Clic sur 'Debug' ---
-    time.sleep(2)
-    debug_btn = driver.find_element(By.XPATH, "//button[contains(.,'Debug')]")
+    debug_btn = WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Debug')]"))
+    )
     debug_btn.click()
     print("✅ Clic sur 'Debug' réussi")
 
     # --- Clic sur 'Page info' ---
-    time.sleep(2)
-    page_info_btn = driver.find_element(By.XPATH, "//button[contains(.,'Page info')]")
+    page_info_btn = WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Page info')]"))
+    )
     page_info_btn.click()
     print("✅ Clic sur 'Page info' réussi")
 
-    # --- Attente du contenu ---
+    # --- Extraction du View ---
     time.sleep(3)
-    html_content = driver.page_source
-    soup = BeautifulSoup(html_content, "html.parser")
+    soup = BeautifulSoup(driver.page_source, "html.parser")
     markdown_div = soup.find("div", {"class": "markdown-text"})
 
     if markdown_div:
         text_content = markdown_div.get_text(separator=" ").replace("\n", " ")
+        all_views = re.findall(r"View\s*:\s*([A-Za-z0-9_]+)", text_content)
 
-        # --- Extraction du premier View ---
-        match = re.search(r"View:\s*([A-Z0-9_]+)\s*Component:", text_content, re.IGNORECASE)
-        if match:
-            view_name = match.group(1).strip()
-            print(f"🔍 View détecté : {view_name}")
-            df_orders.loc[0, "View détecté"] = view_name
+        if all_views:
+            first_view = all_views[0].strip()
+            print(f"🔍 View détecté : {first_view}")
+            df_orders.loc[0, "View détecté"] = first_view
         else:
             print("⚠️ Aucun View trouvé. Vérifie le format de la page info.")
-            print("Extrait du texte :", text_content[:300])
+            print("Extrait :", text_content[:300])
     else:
-        print("❌ Impossible de trouver la section 'markdown-text'.")
+        print("❌ Section 'markdown-text' introuvable — vérifie la structure HTML.")
 
 except Exception as e:
     print("❌ Erreur pendant la récupération du View:", e)
 
-# === 5. Sauvegarde du résultat ===
+# === 7. Sauvegarde intermédiaire ===
 result_path = "excel/DATA_MIG_result.xlsx"
 df_orders.to_excel(result_path, index=False)
 print(f"💾 Résultat sauvegardé dans {result_path}")
 
-# === 6. Fermeture du navigateur ===
+# === 8. Accès à la page MigrationJob ===
+if 'first_view' in locals() and first_view:
+    base_url = lien_prod.split("/landing-page")[0]
+
+    migration_path = (
+        "/main/ifsapplications/web/page/MigrationJob/Form;"
+        "path=0.1656053651.381724595.1872552273.1473091230;"
+    )
+
+    migration_url = base_url + migration_path
+    driver.get(migration_url)
+    print(f"➡️ Accès à la page MigrationJob : {migration_url}")
+
+    try:
+        WebDriverWait(driver, 30).until_not(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".spinner-wrapper"))
+        )
+        time.sleep(10)
+        print("✅ Page MigrationJob chargée avec succès")
+    except TimeoutException:
+        print("⚠️ La page MigrationJob n'a pas fini de charger.")
+else:
+    print("⚠️ Impossible de générer l'URL MigrationJob — View non détecté.")
+
+# === 9. Fin du script ===
 driver.quit()
 print("🎉 Script terminé avec succès.")
