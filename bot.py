@@ -9,14 +9,11 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException, StaleElementReferenceException
 from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
-
 
 # === 1. Lecture du fichier Excel ===
 fichier_excel = "excel/DATA_MIG.xlsx"
-
 if not os.path.exists(fichier_excel):
     print(f"❌ Fichier introuvable : {fichier_excel}")
     exit()
@@ -40,7 +37,6 @@ chrome_options.add_argument("--disable-dev-shm-usage")
 chrome_options.add_argument("--remote-debugging-port=9222")
 chrome_options.add_argument("--ignore-certificate-errors")
 
-# 👉 Création d’un profil temporaire
 profil_temp = os.path.join(os.getcwd(), "chrome_temp_profile")
 if not os.path.exists(profil_temp):
     os.makedirs(profil_temp)
@@ -65,7 +61,6 @@ try:
 except TimeoutException:
     print("⚠️ Bouton 'Open IFS Cloud' non trouvé — peut-être déjà connecté.")
 
-# --- Connexion ---
 try:
     WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "username")))
     driver.find_element(By.ID, "username").send_keys(username)
@@ -85,7 +80,6 @@ print(f"\n➡️ Accès au premier lien : {first_link}")
 driver.get(first_link)
 
 try:
-    # Attente du chargement complet
     WebDriverWait(driver, 30).until_not(
         EC.presence_of_element_located((By.CSS_SELECTOR, ".spinner-wrapper"))
     )
@@ -99,7 +93,6 @@ try:
         initials_btn.click()
         print("✅ Clic sur le bouton 'initiales' réussi")
     except ElementClickInterceptedException:
-        print("⏳ Attente que le spinner disparaisse avant de cliquer...")
         WebDriverWait(driver, 15).until_not(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".spinner-wrapper"))
         )
@@ -129,17 +122,14 @@ try:
     if markdown_div:
         text_content = markdown_div.get_text(separator=" ").replace("\n", " ")
         all_views = re.findall(r"View\s*:\s*([A-Za-z0-9_]+)", text_content)
-
         if all_views:
             first_view = all_views[0].strip()
             print(f"🔍 View détecté : {first_view}")
             df_orders.loc[0, "View détecté"] = first_view
         else:
-            print("⚠️ Aucun View trouvé. Vérifie le format de la page info.")
-            print("Extrait :", text_content[:300])
+            print("⚠️ Aucun View trouvé.")
     else:
-        print("❌ Section 'markdown-text' introuvable — vérifie la structure HTML.")
-
+        print("❌ Section 'markdown-text' introuvable.")
 except Exception as e:
     print("❌ Erreur pendant la récupération du View:", e)
 
@@ -151,12 +141,7 @@ print(f"💾 Résultat sauvegardé dans {result_path}")
 # === 8. Accès à la page MigrationJob ===
 if 'first_view' in locals() and first_view:
     base_url = lien_prod.split("/landing-page")[0]
-
-    migration_path = (
-        "/main/ifsapplications/web/page/MigrationJob/Form;"
-        "path=0.1656053651.381724595.1872552273.1473091230;"
-    )
-
+    migration_path = "/main/ifsapplications/web/page/MigrationJob/Form;path=0.1656053651.381724595.1872552273.1473091230;"
     migration_url = base_url + migration_path
     driver.get(migration_url)
     print(f"➡️ Accès à la page MigrationJob : {migration_url}")
@@ -167,29 +152,73 @@ if 'first_view' in locals() and first_view:
         )
         print("✅ Page MigrationJob chargée avec succès")
         time.sleep(5)
+
+        # --- Clic sur New ---
+        retry_count = 0
+        while retry_count < 3:
+            try:
+                new_btn = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[@title='New']"))
+                )
+                new_btn.click()
+                print("✅ Clic sur le bouton 'New' réussi")
+                break
+            except StaleElementReferenceException:
+                print("⚠️ Élément devenu obsolète, tentative de relocalisation...")
+                retry_count += 1
+                time.sleep(1)
+        if retry_count == 3:
+            print("❌ Impossible de cliquer sur 'New' après 3 tentatives")
+
+        # --- Remplissage du Job ID ---
         try:
-            retry_count = 0
-            new_btn = None
-            while retry_count < 3:
-                try:
-                    new_btn = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.XPATH, "//button[@title='New']"))
-                    )
-                    new_btn.click()
-                    print("✅ Clic sur le bouton 'New' réussi")
-                    break  # sortie de la boucle si réussi
-                except StaleElementReferenceException:
-                    print("⚠️ Élément devenu obsolète, tentative de relocalisation...")
-                    retry_count += 1
-                    time.sleep(1)
-            if retry_count == 3:
-                print("❌ Impossible de cliquer sur 'New' après 3 tentatives")
+            time.sleep(5)
+            job_id_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[aria-label='Job ID']"))
+            )
+
+            type_view = df_orders.iloc[0]["Type"]
+            view_name = first_view
+            suffix = "_X" if type_view.upper() == "EA" else ""
+            base_job_id = f"{type_view}_{view_name}{suffix}"
+            job_id_final = base_job_id[:30]  # tronquer à 30 caractères max
+
+            job_id_input.clear()
+            job_id_input.send_keys(job_id_final)
+            print(f"✅ Job ID rempli : {job_id_final}")
+
         except TimeoutException:
-            print("⚠️ Bouton 'New' introuvable ou non cliquable")
+            print("❌ Champ Job ID introuvable sur la page")
+        
+        # --- Remplissage du Description et View Name ---
+        try:
+            # Description (max 50 caractères)
+            description_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[aria-label='Description']"))
+            )
+            description_value = first_view[:50]  # tronquer à 50 caractères max
+            description_input.clear()
+            description_input.send_keys(description_value)
+            print(f"✅ Description rempli : {description_value}")
+
+            # View Name (max 50 caractères, même valeur)
+            view_name_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[aria-label='View Name']"))
+            )
+            view_name_value = first_view[:50]
+            view_name_input.clear()
+            view_name_input.send_keys(view_name_value)
+            print(f"✅ View Name rempli : {view_name_value}")
+
+        except TimeoutException:
+            print("❌ Champ Description ou View Name introuvable sur la page")
+
+
     except TimeoutException:
         print("⚠️ La page MigrationJob n'a pas fini de charger.")
 else:
     print("⚠️ Impossible de générer l'URL MigrationJob — View non détecté.")
+
 # === 9. Fin du script ===
 driver.quit()
 print("🎉 Script terminé avec succès.")
