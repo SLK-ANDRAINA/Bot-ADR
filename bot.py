@@ -11,6 +11,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
+
 
 # === 1. Lecture du fichier Excel ===
 fichier_excel = "excel/DATA_MIG.xlsx"
@@ -163,13 +165,31 @@ if 'first_view' in locals() and first_view:
         WebDriverWait(driver, 30).until_not(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".spinner-wrapper"))
         )
-        time.sleep(10)
         print("✅ Page MigrationJob chargée avec succès")
+        time.sleep(5)
+        try:
+            retry_count = 0
+            new_btn = None
+            while retry_count < 3:
+                try:
+                    new_btn = WebDriverWait(driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[@title='New']"))
+                    )
+                    new_btn.click()
+                    print("✅ Clic sur le bouton 'New' réussi")
+                    break  # sortie de la boucle si réussi
+                except StaleElementReferenceException:
+                    print("⚠️ Élément devenu obsolète, tentative de relocalisation...")
+                    retry_count += 1
+                    time.sleep(1)
+            if retry_count == 3:
+                print("❌ Impossible de cliquer sur 'New' après 3 tentatives")
+        except TimeoutException:
+            print("⚠️ Bouton 'New' introuvable ou non cliquable")
     except TimeoutException:
         print("⚠️ La page MigrationJob n'a pas fini de charger.")
 else:
     print("⚠️ Impossible de générer l'URL MigrationJob — View non détecté.")
-
 # === 9. Fin du script ===
 driver.quit()
 print("🎉 Script terminé avec succès.")
